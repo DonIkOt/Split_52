@@ -240,3 +240,4 @@ export function preprocessOcrText(raw: string): string {
     .replace(/\bO\b/g, '0')        // одиночная O → 0 в числах
     .trim()
 }
+

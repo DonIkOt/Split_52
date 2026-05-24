@@ -73,6 +73,7 @@ interface AppContextValue {
   removeReceipt: (receiptId: string) => Promise<void>
   renameReceipt: (receiptId: string, name: string) => Promise<void>
   addItem: (receiptId: string, name: string, price: number) => Promise<void>
+  addItems: (receiptId: string, items: { name: string; price: number }[]) => Promise<void>
   updateItem: (receiptId: string, item: ReceiptItem) => Promise<void>
   removeItem: (receiptId: string, itemId: string) => Promise<void>
   // Оплата
@@ -252,6 +253,25 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await updateSession(updated)
   }, [currentSession, updateSession])
 
+  // Добавить несколько позиций за один раз (для OCR — избегаем stale closure)
+  const addItems = useCallback(async (receiptId: string, newItems: { name: string; price: number }[]) => {
+    if (!currentSession) return
+    const ids = currentSession.participants.map(p => p.id)
+    const items: ReceiptItem[] = newItems.map(({ name, price }) => ({
+      id: genId(),
+      name,
+      price,
+      shares: defaultShares(ids),
+    }))
+    const updated = {
+      ...currentSession,
+      receipts: currentSession.receipts.map(r =>
+        r.id === receiptId ? { ...r, items: [...r.items, ...items] } : r
+      ),
+    }
+    await updateSession(updated)
+  }, [currentSession, updateSession])
+
   const updateItem = useCallback(async (receiptId: string, item: ReceiptItem) => {
     if (!currentSession) return
     const updated = {
@@ -301,6 +321,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     removeReceipt,
     renameReceipt,
     addItem,
+    addItems,
     updateItem,
     removeItem,
     setPayment,

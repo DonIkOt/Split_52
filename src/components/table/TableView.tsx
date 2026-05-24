@@ -394,7 +394,7 @@ function ReceiptCard({
 
 // ─── Главный компонент ─────────────────────────────────────────────────────────
 export default function TableView() {
-  const { currentSession, addReceipt, removeReceipt, renameReceipt, addItem, updateItem, removeItem } = useApp()
+  const { currentSession, addReceipt, removeReceipt, renameReceipt, addItem, addItems, updateItem, removeItem } = useApp()
   const [newReceiptName, setNewReceiptName] = useState('')
   const [showAddReceipt, setShowAddReceipt] = useState(false)
   const [showOcr, setShowOcr] = useState(false)
@@ -542,9 +542,8 @@ export default function TableView() {
       {showOcr && ocrTargetReceiptId && (
         <OcrScanner
           onConfirm={async (scannedItems) => {
-            for (const item of scannedItems) {
-              await addItem(ocrTargetReceiptId, item.name, item.price)
-            }
+            // addItems добавляет все позиции за один раз — избегаем stale closure
+            await addItems(ocrTargetReceiptId, scannedItems)
             setShowOcr(false)
             setOcrTargetReceiptId(null)
           }}
@@ -557,3 +556,4 @@ export default function TableView() {
     </div>
   )
 }
+
