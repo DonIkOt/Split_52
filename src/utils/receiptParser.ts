@@ -1,137 +1,238 @@
-// ─── Парсер текста русского чека ─────────────────────────────────────────────
-// Извлекает пары "название товара — цена" из сырого OCR текста
+// ─── Универсальный парсер российских чеков ───────────────────────────────────
+//
+// Поддерживаемые форматы:
+//
+// [A] Однострочный с НДС (Лента, Пятёрочка, Магнит, АТОЛ):
+//     ПИВО ВОЛКОВ 104.99 *1 =104.99 НДС 22%
+//     ШАШЛЫК КУР  529.99 *1.559 =826.25 НДС 10%   ← весовой
+//     КОЛА        109.99 *3 =329.97 НДС 22%        ← несколько штук
+//
+// [B] Двухстрочный ресторанный (ШТРИХ-М, iiko):
+//     картофель печёный
+//         115.00 * 1шт. = 115.00
+//
+// [C] Стандартный однострочный (пробелы между названием и ценой):
+//     Молоко 3.2% 1л          89.90
+//
+// [D] С количеством в начале:
+//     2 x Кола 2л             398.00
+//
+// [E] Табличный (заголовок + строки):
+//     Молоко    89.90   1    89.90
+//
+// [F] Цена через дефис:
+//     ПИВО БАЛТИКА       110-00
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface ParsedItem {
   name: string
   price: number
-  raw: string       // исходная строка для отладки
+  raw: string
   confidence: 'high' | 'medium' | 'low'
 }
 
-// Слова-стоп: строки с ними не являются товарами
-const STOP_WORDS = [
-  'итого', 'итог', 'сумма', 'итого:', 'к оплате', 'наличными', 'картой',
-  'сдача', 'кэшбэк', 'скидка', 'бонус', 'баллы', 'ндс', 'нал', 'безнал',
-  'спасибо', 'телефон', 'кассир', 'чек №', 'чек#', 'дата', 'время',
-  'магазин', 'адрес', 'инн', 'кпп', 'огрн', 'фн:', 'фд:', 'фп:',
-  'смена', 'кассовый', 'фискальный', 'документ', 'рецепт', 'receipt',
-  'total', 'subtotal', 'change', 'cash', 'sale',
-]
+// ─── Стоп-слова ───────────────────────────────────────────────────────────────
+const STOP_RE = /итого|к оплате|наличными|картой|безналичными|сдача|кэшбэк|скидк|бонус|баллы|без ндс|сумма ндс|спасибо|кассир|чек №|чек#|место расчет|сно:|усн |приход|возврат|receipt|total|cash|sale|павильон|документ на продаж|смена n|касса:|кассовый чек|ваша скидка|начислено|баланс|скидка по карте|субитого/i
 
-// Регулярки для разных форматов строк чека:
-const PRICE_PATTERNS = [
-  // "Молоко 3.2% 1л       89.90"  — название + пробелы + цена в конце
-  /^(.+?)\s{2,}(\d+[.,]\d{2})\s*$/,
-  // "Хлеб белый       1  45.00  45.00"  — с количеством и суммой
-  /^(.+?)\s+\d+\s+\d+[.,]\d{2}\s+(\d+[.,]\d{2})\s*$/,
-  // "ПИВО БАЛТ 0.5     110-00"  — цена через дефис
-  /^(.+?)\s{2,}(\d+)-(\d{2})\s*$/,
-  // "Чипсы Lays 75г    1x120.00"  — с 1x
-  /^(.+?)\s+1[xх×](\d+[.,]\d{2})\s*$/,
-  // "Кола 2л  199р"  — с буквой р
-  /^(.+?)\s{2,}(\d+[.,]?\d*)\s*[рр₽]\s*$/i,
-  // "Позиция 250.00"  — минимум 2 пробела перед ценой
-  /^(.{3,40}?)\s{1,}(\d{2,4}[.,]\d{2})\s*$/,
-]
+const SERVICE_RE = /^[\d\s.,\-*=_:/\\|<>(){}[\]]{4,}$|^\d{6,}|^(инн|кпп|фн|фд|фп|рн|ккт|снилс)\s|\d{2}\.\d{2}\.\d{4}/i
 
-function parsePrice(raw: string): number | null {
-  // Заменяем запятую на точку
-  const normalized = raw.replace(',', '.')
-  const val = parseFloat(normalized)
-  if (isNaN(val) || val <= 0 || val > 100000) return null
-  return Math.round(val * 100) / 100
+function isStop(line: string)    { return STOP_RE.test(line.trim()) }
+function isService(line: string) { return SERVICE_RE.test(line.trim()) }
+
+function toPrice(s: string): number | null {
+  const v = parseFloat(s.replace(',', '.').replace(/\s/g, ''))
+  if (isNaN(v) || v <= 0 || v > 999999) return null
+  return Math.round(v * 100) / 100
 }
 
-function cleanName(raw: string): string {
-  return raw
-    .replace(/^\d+[\s.)\-]+/, '')   // убираем номер строки "1. Молоко"
-    .replace(/[*×x]\s*\d+.*$/, '')  // убираем "x2" в конце
+function cleanName(s: string): string {
+  return s
+    .replace(/^\d+\s*[x×х]\s*/i, '')  // "2 x " в начале
+    .replace(/^\d+[\s.)]\s*/,   '')    // "1. " номер строки
+    .replace(/[*×х]\s*[\d.,]+.*$/i, '') // "* 2" в конце
     .replace(/\s{2,}/g, ' ')
-    .replace(/[^\w\sа-яёА-ЯЁ%.,&()/-]/gi, '')
     .trim()
 }
 
-function isStopLine(line: string): boolean {
-  const lower = line.toLowerCase()
-  return STOP_WORDS.some(w => lower.includes(w))
+function confidence(name: string, price: number): ParsedItem['confidence'] {
+  if (name.length >= 4 && price >= 5 && price <= 50000) return 'high'
+  if (name.length >= 2 && price > 0) return 'medium'
+  return 'low'
 }
 
-function isLikelyServiceLine(line: string): boolean {
-  // Строки только с цифрами/символами — не товары
-  if (/^[\d\s.,\-*=_]+$/.test(line)) return true
-  // Очень короткие строки
-  if (line.trim().length < 3) return true
-  // Штрихкоды
-  if (/^\d{8,}/.test(line.trim())) return true
-  return false
-}
+// ─── Паттерн A: однострочный с *кол =итог [НДС XX%] ─────────────────────────
+// "ПИВО ВОЛКОВ 104.99 *1 =104.99 НДС 22%"
+// "ШАШЛЫК КУР  529.99 *1.559 =826.25 НДС 10%"
+const RE_A = /^(.+?)\s+(\d+[.,]\d{2,3})\s*[*×х]\s*[\d.,]+\s*=\s*(\d+[.,]\d{2})/i
 
+// ─── Паттерн B: строка цены двухстрочного формата ────────────────────────────
+// "    115.00 * 1шт. = 115.00"  или  "85.00 * 1 = 85.00"
+const RE_B = /^\s*(\d+[.,]\d{2})\s*[*×х]\s*[\d.,]+\s*(?:шт\.?)?\s*=\s*(\d+[.,]\d{2})\s*$/i
+
+// Просто "= 115.00" в конце (упрощённый двухстрочный)
+const RE_B2 = /=\s*(\d+[.,]\d{2})\s*(?:руб\.?)?\s*$/i
+
+// ─── Паттерн C: название + пробелы + цена ────────────────────────────────────
+// "Молоко 3.2%          89.90"
+const RE_C = /^(.{3,35}?)\s{2,}(\d+[.,]\d{2})\s*$/
+
+// ─── Паттерн D: кол-во + название + цена ─────────────────────────────────────
+// "2 x Кола 2л   398.00"
+const RE_D = /^\d+\s*[xх×]\s*(.+?)\s{2,}(\d+[.,]\d{2})\s*$/i
+
+// ─── Паттерн E: табличный (название пробелы цена пробелы кол пробелы итог) ───
+// "Молоко    89.90   1    89.90"
+const RE_E = /^(.+?)\s{2,}(\d+[.,]\d{2})\s+[\d.,]+\s+(\d+[.,]\d{2})\s*$/
+
+// ─── Паттерн F: цена через дефис ─────────────────────────────────────────────
+// "ПИВО БАЛТИКА       110-00"
+const RE_F = /^(.+?)\s{2,}(\d{2,4})-(\d{2})\s*$/
+
+// ─── Паттерн G: цена с буквой р/₽ ───────────────────────────────────────────
+// "Хлеб белый        55р"
+const RE_G = /^(.+?)\s{2,}(\d+[.,]?\d*)\s*[р₽руб]\b/i
+
+// ─── Главная функция ──────────────────────────────────────────────────────────
 export function parseReceiptText(text: string): ParsedItem[] {
-  const lines = text
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.length > 0)
-
+  const lines = text.split('\n').map(l => l.trimEnd())
   const items: ParsedItem[] = []
+  let prevName = ''   // для двухстрочного формата
+  let prevRaw  = ''
 
   for (const line of lines) {
-    if (isStopLine(line)) continue
-    if (isLikelyServiceLine(line)) continue
-
-    let matched = false
-
-    for (const pattern of PRICE_PATTERNS) {
-      const m = line.match(pattern)
-      if (!m) continue
-
-      let nameRaw = m[1]
-      // Для паттерна с дефисом (110-00) собираем цену
-      const priceRaw = pattern.source.includes(')-((') 
-        ? `${m[2]}.${m[3]}` 
-        : m[2]
-
-      const price = parsePrice(priceRaw)
-      if (!price) continue
-
-      const name = cleanName(nameRaw)
-      if (name.length < 2) continue
-
-      // Определяем уверенность
-      let confidence: ParsedItem['confidence'] = 'medium'
-      if (name.length >= 4 && price >= 5 && price <= 5000) confidence = 'high'
-      if (name.length < 4 || price < 5 || price > 10000) confidence = 'low'
-
-      items.push({ name, price, raw: line, confidence })
-      matched = true
-      break
+    const t = line.trim()
+    if (!t || isService(t) || isStop(t)) {
+      prevName = ''; prevRaw = ''; continue
     }
 
-    // Fallback: строка следующая за ценой (некоторые чеки разбивают на 2 строки)
-    if (!matched) {
-      // Просто цена в строке — запоминаем для связки с предыдущей
+    // ── Формат A: однострочный с *кол =итог ─────────────────────────────────
+    {
+      const m = t.match(RE_A)
+      if (m) {
+        const name  = cleanName(m[1])
+        const price = toPrice(m[3])  // берём итоговую цену (после =)
+        if (name.length >= 2 && price) {
+          items.push({ name, price, raw: t, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+    }
+
+    // ── Формат B: строка цены двухстрочного ─────────────────────────────────
+    {
+      const m = t.match(RE_B)
+      if (m && prevName) {
+        const price = toPrice(m[2])
+        if (price) {
+          const name = cleanName(prevName)
+          items.push({ name, price, raw: `${prevRaw} | ${t}`, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+      // Упрощённый B2: строка начинается с отступа + число
+      if (/^\s{2,}\d/.test(line) && prevName) {
+        const m2 = t.match(RE_B2)
+        if (m2) {
+          const price = toPrice(m2[1])
+          if (price) {
+            const name = cleanName(prevName)
+            items.push({ name, price, raw: `${prevRaw} | ${t}`, confidence: confidence(name, price) })
+            prevName = ''; prevRaw = ''; continue
+          }
+        }
+      }
+    }
+
+    // ── Формат E: табличный с тремя числами ─────────────────────────────────
+    {
+      const m = t.match(RE_E)
+      if (m) {
+        const name  = cleanName(m[1])
+        const price = toPrice(m[3])  // последнее число = итоговая цена
+        if (name.length >= 2 && price) {
+          items.push({ name, price, raw: t, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+    }
+
+    // ── Формат D: кол-во × название ─────────────────────────────────────────
+    {
+      const m = t.match(RE_D)
+      if (m) {
+        const name  = cleanName(m[1])
+        const price = toPrice(m[2])
+        if (name.length >= 2 && price) {
+          items.push({ name, price, raw: t, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+    }
+
+    // ── Формат C: стандартный пробельный ────────────────────────────────────
+    {
+      const m = t.match(RE_C)
+      if (m) {
+        const name  = cleanName(m[1])
+        const price = toPrice(m[2])
+        if (name.length >= 2 && price) {
+          items.push({ name, price, raw: t, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+    }
+
+    // ── Формат F: цена через дефис ──────────────────────────────────────────
+    {
+      const m = t.match(RE_F)
+      if (m) {
+        const name  = cleanName(m[1])
+        const price = toPrice(`${m[2]}.${m[3]}`)
+        if (name.length >= 2 && price) {
+          items.push({ name, price, raw: t, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+    }
+
+    // ── Формат G: цена с р/₽ ────────────────────────────────────────────────
+    {
+      const m = t.match(RE_G)
+      if (m) {
+        const name  = cleanName(m[1])
+        const price = toPrice(m[2])
+        if (name.length >= 2 && price) {
+          items.push({ name, price, raw: t, confidence: confidence(name, price) })
+          prevName = ''; prevRaw = ''; continue
+        }
+      }
+    }
+
+    // ── Не распознали — запоминаем как потенциальное название (для формата B)
+    if (t.length >= 2 && t.length <= 60 && !/^\d/.test(t)) {
+      prevName = t
+      prevRaw  = t
+    } else {
+      prevName = ''; prevRaw = ''
     }
   }
 
-  // Дедупликация по имени+цене
+  // Дедупликация по ключу имя+цена
   const seen = new Set<string>()
   return items.filter(item => {
-    const key = `${item.name}|${item.price}`
+    const key = `${item.name.toLowerCase()}|${item.price}`
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
 }
 
-// ─── Нормализация OCR артефактов ──────────────────────────────────────────────
+// ─── Пре-обработка OCR текста ─────────────────────────────────────────────────
 export function preprocessOcrText(raw: string): string {
   return raw
-    // OCR часто путает: О→0, З→3, l→1, I→1
-    .replace(/\bO\b/g, '0')
-    // Нормализуем разделители
     .replace(/[—–]/g, '-')
-    // Убираем повторяющиеся пробелы (но сохраняем двойные — они разделители)
-    .replace(/[ \t]{3,}/g, '  ')
-    // Убираем символы которые OCR читает как мусор
-    .replace(/[|¦]/g, '')
+    .replace(/[ \t]{3,}/g, '   ')  // нормализуем пробелы, сохраняем двойные
+    .replace(/[|¦]/g, 'I')         // вертикальная черта → I (часто путается)
+    .replace(/\bO\b/g, '0')        // одиночная O → 0 в числах
     .trim()
 }
