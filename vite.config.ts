@@ -6,7 +6,7 @@ export default defineConfig({
   // Для GitHub Pages: замени 'split-app' на имя своего репозитория
   // Если репо называется split-app → base: '/split-app/'
   // Если хочешь на корневой домен (username.github.io) → base: '/'
-  base: '/split-app/',
+  base: '/Split_52/',
 
   plugins: [
     react(),
