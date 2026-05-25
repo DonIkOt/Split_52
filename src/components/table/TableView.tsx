@@ -1,9 +1,10 @@
 import { useState, useRef } from 'react'
-import { Plus, Trash2, ChevronDown, ChevronUp, Receipt, Pencil, Check, X, Ban, ScanLine } from 'lucide-react'
+import { Plus, Trash2, ChevronDown, ChevronUp, Receipt, Pencil, Check, X, Ban, ScanLine, FileJson } from 'lucide-react'
 import { useApp } from '../../store/AppContext'
 import { round2, formatMoney, defaultShares } from '../../utils'
 import type { ReceiptItem, Receipt as ReceiptType } from '../../types'
 import OcrScanner from '../ocr/OcrScanner'
+import TextImport from '../ocr/TextImport'
 
 // ─── Пресеты долей ────────────────────────────────────────────────────────────
 type Preset = 'equal' | 'only' | 'zero'
@@ -399,6 +400,8 @@ export default function TableView() {
   const [showAddReceipt, setShowAddReceipt] = useState(false)
   const [showOcr, setShowOcr] = useState(false)
   const [ocrTargetReceiptId, setOcrTargetReceiptId] = useState<string | null>(null)
+  const [showTextImport, setShowTextImport] = useState(false)
+  const [textImportReceiptId, setTextImportReceiptId] = useState<string | null>(null)
 
   if (!currentSession) return null
   const { participants, receipts } = currentSession
@@ -489,7 +492,7 @@ export default function TableView() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-2">
           {/* Ввод вручную */}
           <button
             onClick={() => setShowAddReceipt(true)}
@@ -518,6 +521,22 @@ export default function TableView() {
             <span className="font-medium text-sm">Сканировать</span>
             <span className="text-xs opacity-70">фото чека</span>
           </button>
+
+          {/* Импорт из ИИ */}
+          <button
+            onClick={async () => {
+              const receipt = await addReceipt('Импорт из ИИ')
+              setTextImportReceiptId(receipt.id)
+              setShowTextImport(true)
+            }}
+            className="py-4 rounded-2xl border-2 border-dashed border-slate-700
+                       hover:border-green-700 hover:bg-green-900/10 transition-all
+                       flex flex-col items-center justify-center gap-2 text-slate-500 hover:text-green-400"
+          >
+            <FileJson size={22} />
+            <span className="font-medium text-sm">Из ИИ</span>
+            <span className="text-xs opacity-70">JSON / CSV</span>
+          </button>
         </div>
       )}
 
@@ -536,6 +555,21 @@ export default function TableView() {
           <p>Кнопка <strong className="text-slate-600">0</strong> — участник не участвует в позиции</p>
           <p>Иконка <strong className="text-slate-600">⊘</strong> — исключить позицию из расчёта</p>
         </div>
+      )}
+
+      {/* ── Импорт из ИИ ── */}
+      {showTextImport && textImportReceiptId && (
+        <TextImport
+          onConfirm={async (items) => {
+            await addItems(textImportReceiptId, items)
+            setShowTextImport(false)
+            setTextImportReceiptId(null)
+          }}
+          onClose={() => {
+            setShowTextImport(false)
+            setTextImportReceiptId(null)
+          }}
+        />
       )}
 
       {/* ── OCR Сканер ── */}
