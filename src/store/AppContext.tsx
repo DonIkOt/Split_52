@@ -78,6 +78,7 @@ interface AppContextValue {
   removeItem: (receiptId: string, itemId: string) => Promise<void>
   // Оплата
   setPayment: (participantId: string, amount: number) => Promise<void>
+  setPayments: (payments: { participantId: string; amount: number }[]) => Promise<void>
 }
 
 const AppContext = createContext<AppContextValue | null>(null)
@@ -306,6 +307,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     await updateSession({ ...currentSession, payments })
   }, [currentSession, updateSession])
 
+  // Установить несколько оплат за один раз (избегаем stale closure при цикле)
+  const setPayments = useCallback(async (newPayments: { participantId: string; amount: number }[]) => {
+    if (!currentSession) return
+    const payments = newPayments.filter(p => p.amount > 0)
+    await updateSession({ ...currentSession, payments })
+  }, [currentSession, updateSession])
+
   const value: AppContextValue = {
     state,
     currentSession,
@@ -325,6 +333,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     updateItem,
     removeItem,
     setPayment,
+    setPayments,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
