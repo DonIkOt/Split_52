@@ -4,7 +4,7 @@ import { useApp } from '../../store/AppContext'
 import { calculateSummary, formatMoney, round2 } from '../../utils'
 
 export default function PaymentsView() {
-  const { currentSession, setPayment, navigate } = useApp()
+  const { currentSession, setPayment, setPayments, navigate } = useApp()
   const [localValues, setLocalValues] = useState<Record<string, string>>({})
 
   if (!currentSession) return null
@@ -25,26 +25,38 @@ export default function PaymentsView() {
   const isBalanced = Math.abs(remaining) < 0.5
 
   // Кто платил: быстрое заполнение
+  // Один участник заплатил всё — один атомарный вызов
   const handlePayAll = (payerId: string) => {
+    const newPayments = participants.map(p => ({
+      participantId: p.id,
+      amount: p.id === payerId ? summary.totalAmount : 0,
+    }))
+    setPayments(newPayments)
+    const newLocal: Record<string, string> = {}
     participants.forEach(p => {
-      const amount = p.id === payerId ? summary.totalAmount : 0
-      setPayment(p.id, amount)
-      setLocalValues(prev => ({ ...prev, [p.id]: amount > 0 ? String(amount) : '' }))
+      newLocal[p.id] = p.id === payerId ? String(summary.totalAmount) : ''
     })
+    setLocalValues(newLocal)
   }
 
-  // Сплит — каждый заплатил свою долю
+  // Каждый заплатил свою долю — один атомарный вызов
   const handlePayOwn = () => {
+    const newPayments = participants.map(p => ({
+      participantId: p.id,
+      amount: summary.owedByParticipant[p.id] ?? 0,
+    }))
+    setPayments(newPayments)
+    const newLocal: Record<string, string> = {}
     participants.forEach(p => {
       const amount = summary.owedByParticipant[p.id] ?? 0
-      setPayment(p.id, amount)
-      setLocalValues(prev => ({ ...prev, [p.id]: amount > 0 ? String(amount) : '' }))
+      newLocal[p.id] = amount > 0 ? String(amount) : ''
     })
+    setLocalValues(newLocal)
   }
 
   // Сброс
   const handleReset = () => {
-    participants.forEach(p => setPayment(p.id, 0))
+    setPayments([])
     setLocalValues({})
   }
 
